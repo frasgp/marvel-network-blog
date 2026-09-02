@@ -2,17 +2,17 @@
 title: "About Marvel Graph Lab"
 ---
 
-**Marvel Graph Lab** is a weekly blog built for *Assignment 1.8 — "Go nuts with your LLM"* in
+**Marvel Graph Lab** is a weekly blog built for 
 **02805 Social Graphs and Interactions** (DTU). Each week we're handed a new snapshot of a
-shared Marvel Comics character network — nodes are Wikipedia articles about Marvel characters,
-edges are wiki-links between them — and we analyze it with that week's tools.
+shared Marvel Comics character network and we analyze it with that week's tools.
 
 Dataset: [`week1_nodes.tsv` / `week1_edges.tsv`](https://sunelehmann.com/socialgraphs2026-web/data/)
 (frozen snapshot, 2026-08-26).
 
 ## Who we are
 
-[Your names here]
+Aurélien
+Justin
 
 ## License
 
