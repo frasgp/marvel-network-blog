@@ -1,0 +1,30 @@
+project:
+  type: website
+
+website:
+  title: "Marvel Graph Lab"
+  description: "A semester of network-science stories about the Marvel wiki-link graph — course 02805, Social Graphs and Interactions."
+  navbar:
+    left:
+      - href: index.qmd
+        text: Posts
+      - href: about.qmd
+        text: About
+    right:
+      - icon: rss
+        href: index.xml
+
+format:
+  html:
+    theme: [flatly, styles.scss]
+    toc: true
+    code-fold: show
+    code-tools: true
+    fig-cap-location: bottom
+    grid:
+      body-width: 900px
+
+execute:
+  freeze: auto
+  echo: true
+  warning: false

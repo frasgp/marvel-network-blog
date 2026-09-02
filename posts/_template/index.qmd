@@ -1,0 +1,49 @@
+---
+title: "Week N — TODO title"
+subtitle: "TODO one-line hook"
+date: 2026-01-01
+categories: [weekN]
+author: "Marvel Graph Lab"
+execute:
+  echo: true
+  warning: false
+---
+
+<!--
+Copy this whole folder to posts/2026-weekNN-<slug>/ and rename it (drop the leading
+underscore so Quarto renders it and the homepage listing picks it up automatically —
+no other file needs editing). Put that week's data files in a data/ subfolder next to
+this index.qmd, referenced by relative path (e.g. "data/weekN_nodes.tsv").
+-->
+
+## What we asked
+
+TODO — the question(s) this week's tools let us ask of the shared network.
+
+## Loading this week's release
+
+```{python}
+import pandas as pd
+import networkx as nx
+import matplotlib.pyplot as plt
+
+# TODO: load this week's data, e.g.
+# nodes = pd.read_csv("data/weekN_nodes.tsv", sep="\t", comment="#", quoting=3)
+# edges = pd.read_csv("data/weekN_edges.tsv", sep="\t", comment="#", names=["source", "target"])
+```
+
+## TODO analysis section(s)
+
+Add one section per sub-question, each with a code chunk and enough prose to explain what it
+shows. Use `#| label:` and `#| fig-cap:` on any chunk that produces a figure you want captioned.
+
+```{python}
+#| label: fig-todo
+#| fig-cap: "TODO caption"
+
+# TODO
+```
+
+## What surprised us
+
+TODO — at least one genuine, specific finding, not a restated assumption.

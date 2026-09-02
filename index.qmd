@@ -1,0 +1,15 @@
+---
+title: "Marvel Graph Lab"
+listing:
+  contents: posts
+  sort: "date desc"
+  type: default
+  categories: true
+  fields: [image, date, title, subtitle, reading-time, description]
+page-layout: full
+title-block-banner: false
+---
+
+A weekly dispatch from **02805 Social Graphs and Interactions**, tracking the evolving
+Marvel Comics character network one dataset release at a time. New post every week, same
+cast of characters, more graph theory each time.

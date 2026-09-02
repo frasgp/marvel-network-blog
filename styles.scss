@@ -1,0 +1,33 @@
+/*-- scss:defaults --*/
+$primary:    #c8102e;
+$body-bg:    #fbf9f6;
+$body-color: #1b1b1b;
+$link-color: $primary;
+$navbar-bg:  #1b1b1b;
+$navbar-fg:  #fbf9f6;
+$headings-font-weight: 800;
+$font-family-sans-serif: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+
+/*-- scss:rules --*/
+.quarto-title-banner {
+  background: linear-gradient(135deg, $primary, darken($primary, 18%));
+  color: white;
+}
+
+.navbar-title {
+  letter-spacing: 0.5px;
+  font-weight: 800;
+}
+
+pre.sourceCode {
+  border-left: 3px solid $primary;
+}
+
+.listing-card,
+.quarto-post {
+  border-radius: 6px;
+}
+
+.quarto-title-banner h1.title {
+  font-weight: 800;
+}

@@ -1,0 +1,17 @@
+# Quarto build artifacts
+/_site/
+/.quarto/
+
+# Jupyter
+**/.ipynb_checkpoints/
+**/.jupyter_cache/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store
+
+**/*.quarto_ipynb
