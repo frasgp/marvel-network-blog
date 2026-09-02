@@ -1,6 +1,7 @@
 # Quarto build artifacts
 /_site/
 /.quarto/
+/_freeze
 
 # Jupyter
 **/.ipynb_checkpoints/

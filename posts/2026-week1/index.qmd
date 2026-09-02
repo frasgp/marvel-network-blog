@@ -1,0 +1,124 @@
+---
+title: "Week 1 — Heroes Meetup"
+subtitle: "Meeting up with Marvel Heroes and learning more about their relationships"
+date: 2026-01-01
+categories: [week1]
+author: "Marvel Graph Lab"
+execute:
+  echo: true
+  warning: false
+---
+
+
+## What we asked
+
+TODO — the question(s) this week's tools let us ask of the shared network.
+
+## Loading this week's release
+
+```{python}
+import pandas as pd
+import networkx as nx
+import matplotlib.pyplot as plt
+import numpy as np
+
+%matplotlib inline
+
+# TODO: load this week's data, e.g.
+nodes = pd.read_csv("data/week1_nodes.tsv", sep="\t", comment="#", quoting=3)
+edges = pd.read_csv("data/week1_edges.tsv", sep="\t", comment="#", names=["source", "target"])
+
+graph = nx.DiGraph()
+graph.add_nodes_from(nodes.node_id)
+graph.add_edges_from(edges.itertuples(index=False))
+```
+
+## Analysis
+
+### Popularity
+
+Investigating the counts of degrees in the graph, we notice a tail, especially for the in-degrees.
+
+```{python}
+#| label: In and Out Degrees
+#| fig-cap: In and Out Degrees
+
+in_degrees = graph.in_degree
+out_degrees = graph.out_degree
+
+max_degree = max(list(in_degrees) + list(out_degrees), key=lambda degree: degree[1])[1]
+degrees = pd.Series(range(1, max_degree+2))
+
+# Convert in_degrees and out_degrees to pandas Series
+in_degrees_series = pd.Series([degree[1] for degree in in_degrees]) +1 
+out_degrees_series = pd.Series([degree[1] for degree in out_degrees]) +1 
+
+# Count occurrences of each degree
+in_degrees_count = in_degrees_series.value_counts().sort_index().reindex(degrees, fill_value=0)
+out_degrees_count = out_degrees_series.value_counts().sort_index().reindex(degrees, fill_value=0)
+
+plt.figure(figsize=(8, 5))
+
+plt.plot(in_degrees_count, label="In-degrees")
+plt.plot(out_degrees_count, label="Out-degrees")
+plt.title("In-degree and Out-degree Distribution", fontsize=16)
+plt.xlabel("Degree", fontsize=12)
+plt.ylabel("Number of nodes", fontsize=12)
+
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+```
+
+```{python}
+#| label: logarithms1
+#| fig-cap: In and Out Degrees with log relations
+log_in_degrees_count = in_degrees_count.apply(np.log10)
+log_out_degrees_count = out_degrees_count.apply(np.log10)
+log_degrees = degrees.apply(np.log10)
+plt.figure(figsize=(8, 5))
+
+plt.plot(log_in_degrees_count, label="Log-In-degrees-Count")
+plt.plot(log_out_degrees_count, label="Log-Out-degrees-Count")
+plt.title("In-degree and Out-degree Distribution", fontsize=16)
+plt.xlabel("Degree", fontsize=12)
+plt.ylabel("Log(Number of nodes)", fontsize=12)
+plt.legend()
+plt.show()
+
+```
+
+```{python}
+#| label: logarithms2
+#| fig-cap: In and Out Degrees with log relations
+plt.figure(figsize=(8, 5))
+
+plt.plot(log_degrees, in_degrees_count, label="Log-In-degrees-Count")
+plt.plot(log_degrees, out_degrees_count, label="Log-Out-degrees-Count")
+plt.title("In-degree and Out-degree Distribution", fontsize=16)
+plt.xlabel("Log(Degree)", fontsize=12)
+plt.ylabel("Log(Number of nodes)", fontsize=12)
+plt.legend()
+plt.show()
+
+```
+
+```{python}
+#| label: logarithms3
+#| fig-cap: In and Out Degrees with log relations
+plt.figure(figsize=(8, 5))
+
+plt.plot(log_degrees, log_in_degrees_count, label="Log-In-degrees-Count")
+plt.plot(log_degrees, log_out_degrees_count, label="Log-Out-degrees-Count")
+plt.title("In-degree and Out-degree Distribution", fontsize=16)
+plt.xlabel("Log(Degree)", fontsize=12)
+plt.ylabel("Log(Number of nodes)", fontsize=12)
+plt.legend()
+plt.show()
+
+```
+
+## What surprised us
+
+TODO — at least one genuine, specific finding, not a restated assumption.
