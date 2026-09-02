@@ -11,7 +11,7 @@ Dataset: [`week1_nodes.tsv` / `week1_edges.tsv`](https://sunelehmann.com/socialg
 
 ## Who we are
 
-Aurélien
+Aurélian
 Justin
 
 ## License
