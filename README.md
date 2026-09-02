@@ -1,7 +1,6 @@
 # Marvel Graph Lab
 
-A weekly Quarto blog for course 02805 (Social Graphs and Interactions) assignment 1.8, "Go nuts
-with your LLM." Each week's post mines that week's release of the shared Marvel Comics character
+A weekly Quarto blog for course 02805 (Social Graphs and Interactions). Each week's post mines that week's release of the shared Marvel Comics character
 network.
 
 ## Prerequisites
