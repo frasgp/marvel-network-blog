@@ -31,6 +31,8 @@ edges = pd.read_csv("data/week1_edges.tsv", sep="\t", comment="#", names=["sourc
 graph = nx.DiGraph()
 graph.add_nodes_from(nodes.node_id)
 graph.add_edges_from(edges.itertuples(index=False))
+
+name_lookup = dict(zip(nodes.node_id, nodes.name))
 ```
 
 ## Analysis
@@ -50,8 +52,8 @@ max_degree = max(list(in_degrees) + list(out_degrees), key=lambda degree: degree
 degrees = pd.Series(range(1, max_degree+2))
 
 # Convert in_degrees and out_degrees to pandas Series
-in_degrees_series = pd.Series([degree[1] for degree in in_degrees]) +1 
-out_degrees_series = pd.Series([degree[1] for degree in out_degrees]) +1 
+in_degrees_series = pd.Series([degree[1] for degree in in_degrees]) +1
+out_degrees_series = pd.Series([degree[1] for degree in out_degrees]) +1
 
 # Count occurrences of each degree
 in_degrees_count = in_degrees_series.value_counts().sort_index().reindex(degrees, fill_value=0)
@@ -119,6 +121,66 @@ plt.show()
 
 ```
 
+### The team nobody links to
+
+9 characters are totally cut off from the rest of the graph — linked to each other, but zero
+links in or out to anyone else.
+
+```{python}
+undirected = graph.to_undirected()
+components = sorted(nx.connected_components(undirected), key=len, reverse=True)
+
+giant = components[0]
+island = max(components[1:], key=len)
+isolates = {n for comp in components[1:] for n in comp if len(comp) == 1}
+
+print(f"giant component: {len(giant)} characters")
+print(f"cut-off team: {len(island)} characters")
+print(f"true isolates (no links at all): {len(isolates)} characters")
+```
+
+```{python}
+for node_id in sorted(island, key=lambda x: name_lookup[x]):
+    print(f"  {name_lookup[node_id]}")
+```
+
+All nine are from *Strikeforce: Morituri*, a 1980s spin-off team. Same Marvel-characters
+category as Spider-Man, and yet not one link either way.
+
+```{python}
+#| label: fig-island
+#| fig-cap: "Strikeforce: Morituri (red) vs. everyone else (grey) — completely disconnected from the rest of the network."
+
+non_isolate_nodes = [n for n in undirected.nodes() if undirected.degree(n) > 0]
+sub = undirected.subgraph(non_isolate_nodes)
+pos = nx.spring_layout(sub, seed=42, k=0.2)
+
+main_extent = max(abs(c) for xy in pos.values() for c in xy)
+ring_radius = main_extent * 1.6
+for i, node_id in enumerate(sorted(isolates)):
+    angle = 2 * np.pi * i / len(isolates)
+    pos[node_id] = (ring_radius * np.cos(angle), ring_radius * np.sin(angle))
+
+node_colors = ["#c8102e" if n in island else "#d9d9d9" for n in undirected.nodes()]
+
+fig, ax = plt.subplots(figsize=(9, 9))
+nx.draw_networkx_edges(sub, pos, alpha=0.1, edge_color="lightgray", ax=ax)
+nx.draw_networkx_nodes(undirected, pos, node_color=node_colors, node_size=40, linewidths=0, ax=ax)
+ax.axis("off")
+plt.tight_layout()
+plt.show()
+```
+
 ## What surprised us
 
-TODO — at least one genuine, specific finding, not a restated assumption.
+We didn't expect the network to have a total dead zone, but it does: the 9-person
+[Strikeforce: Morituri](https://marvel.fandom.com/wiki/Strikeforce_Morituri_(Earth-1287)) team
+links to each other and literally nobody else.
+
+Turns out there's a real reason. Morituri was never part of the mainstream Marvel universe —
+it's a standalone late-80s sci-fi series set on an alternate Earth (retroactively tagged
+Earth-1287), about humans fighting off an alien invasion by taking a process that gives them
+powers but kills them within a year. Spider-Man and the X-Men live in a completely different
+continuity, so there was never really a reason for their wiki pages to cross-link. The one
+crossover Morituri ever got (an X-Force story) happened decades later and clearly wasn't enough
+to leave a trace in this graph.
