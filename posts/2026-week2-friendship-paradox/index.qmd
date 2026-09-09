@@ -1,0 +1,183 @@
+---
+title: "Week 2 — Your Friends Are More Popular Than You"
+subtitle: "Testing the friendship paradox on 303 Marvel characters, and who's responsible for it"
+date: 2026-09-09
+categories: [week2]
+author: "Marvel Graph Lab"
+execute:
+  echo: true
+  warning: false
+---
+
+## What we asked
+
+The friendship paradox says your friends have more friends than you do, on average — a
+consequence of sampling people by their links rather than by headcount, so hubs get
+oversampled. Does it hold for superheroes? Who are the "popular friends" actually
+responsible for it? And is there anyone in this cast who *isn't* out-popularity'd by their
+own connections?
+
+## Loading this week's release
+
+```{python}
+import pandas as pd
+import networkx as nx
+import numpy as np
+import matplotlib.pyplot as plt
+
+%matplotlib inline
+
+nodes = pd.read_csv("data/week2_nodes.tsv", sep="\t", comment="#", quoting=3)
+edges = pd.read_csv("data/week2_edges.tsv", sep="\t", comment="#", names=["source", "target"])
+
+graph = nx.DiGraph()
+graph.add_nodes_from(nodes.node_id)
+graph.add_edges_from(edges.itertuples(index=False))
+name_lookup = dict(zip(nodes.node_id, nodes.name))
+
+g = graph.to_undirected()
+g.remove_edges_from(nx.selfloop_edges(g))
+print(f"{g.number_of_nodes()} characters, {g.number_of_edges()} links")
+```
+
+The paradox is a statement about undirected degree, so from here on we drop direction —
+who links to whom stops mattering, only who's connected to whom.
+
+## Does the paradox hold?
+
+```{python}
+degree = dict(g.degree())
+degrees = np.array(list(degree.values()))
+mean_k = degrees.mean()
+mean_k2 = (degrees**2).mean()
+knn_expected = mean_k2 / mean_k  # Feld's identity: <k_nn> = <k^2>/<k>
+
+print(f"<k>     = {mean_k:.2f}")
+print(f"<k_nn>  = {knn_expected:.2f}")
+print(f"ratio   = {knn_expected/mean_k:.2f}x")
+```
+
+A random character's friends have, on average, 2.3x their own degree. That's not a subtle
+effect — it's the entire distribution's variance showing up in one number, because
+`<k_nn> = <k^2>/<k>`, and `<k^2>` is dragged around hard by Spider-Man's 106 links.
+
+Averages hide how many characters this actually touches, so we checked it person by person too:
+
+```{python}
+own_deg, nbr_mean_deg = [], []
+paradox_holds = 0
+for n in g.nodes():
+    neighbors = list(g.neighbors(n))
+    if not neighbors:
+        continue
+    m = np.mean([degree[nb] for nb in neighbors])
+    own_deg.append(degree[n])
+    nbr_mean_deg.append(m)
+    if m > degree[n]:
+        paradox_holds += 1
+
+own_deg = np.array(own_deg)
+nbr_mean_deg = np.array(nbr_mean_deg)
+print(f"{paradox_holds}/{len(own_deg)} connected characters "
+      f"({paradox_holds/len(own_deg):.1%}) have friends more popular than they are")
+```
+
+```{python}
+#| label: fig-paradox-scatter
+#| fig-cap: "Own degree vs. mean friend degree, log-log. Above the diagonal = your friends beat you."
+
+fig, ax = plt.subplots(figsize=(7, 7))
+ax.scatter(own_deg, nbr_mean_deg, alpha=0.5, s=25, color="#4c72b0")
+lims = [0.8, max(own_deg.max(), nbr_mean_deg.max()) * 1.2]
+ax.plot(lims, lims, "--", color="gray", linewidth=1, label="friends = you")
+ax.set_xscale("log")
+ax.set_yscale("log")
+ax.set_xlim(lims)
+ax.set_ylim(lims)
+ax.set_xlabel("own degree")
+ax.set_ylabel("mean friend degree")
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
+
+Almost the whole cloud sits above the diagonal. The few points below it aren't outliers so
+much as the hubs themselves — a character with 60+ links is, almost by definition, more
+popular than their average friend.
+
+## Who's driving it
+
+```{python}
+top_hubs = sorted(degree.items(), key=lambda kv: -kv[1])[:10]
+for node_id, d in top_hubs:
+    print(f"{name_lookup[node_id]:30s} {d}")
+```
+
+```{python}
+top10 = {n for n, _ in top_hubs}
+outclassed = 0
+outclassed_by_top10 = 0
+for n in g.nodes():
+    for nb in g.neighbors(n):
+        if degree[nb] > degree[n]:
+            outclassed += 1
+            if nb in top10:
+                outclassed_by_top10 += 1
+
+print(f"{outclassed} character-friend pairs where the friend is more popular")
+print(f"{outclassed_by_top10/outclassed:.1%} of those pairs involve just these 10 characters")
+```
+
+Ten characters, out of 303, account for a third of every instance of the paradox. Spider-Man
+alone is the "more popular friend" in a big chunk of them — being linked to him is enough to
+lose the popularity contest, whoever you are.
+
+## Is anyone immune?
+
+```{python}
+local_max = [n for n in g.nodes() if g.degree(n) > 0
+             and all(degree[n] >= degree[nb] for nb in g.neighbors(n))]
+
+for n in local_max:
+    nbr_degs = sorted((degree[nb] for nb in g.neighbors(n)), reverse=True)
+    print(f"{name_lookup[n]:20s} degree={degree[n]:3d}  neighbor degrees={nbr_degs}")
+```
+
+Two characters, and they're an odd pair. Spider-Man is the obvious one — global hub, nobody
+in the network outranks him. The second is **Radian**, degree 6, who turns out to be the hub
+of the [Strikeforce: Morituri island](/posts/2026-week1/) we found completely cut off from
+the rest of the network back in Week 1. Radian isn't popular in any absolute sense — but
+stuck in a 9-character component with no links to the other 294, he never has to compete with
+Spider-Man's tier. The paradox needs a bigger pond to bite; Radian's pond is nine people wide.
+
+## Would any network with hubs show this?
+
+The real network's ratio was 2.33x. We built a `G(n, m)` random graph with the same 303 nodes
+and 1434 links and asked the same question:
+
+```{python}
+rand_g = nx.gnm_random_graph(g.number_of_nodes(), g.number_of_edges(), seed=42)
+rdeg = dict(rand_g.degree())
+rdegrees = np.array(list(rdeg.values()))
+r_knn = (rdegrees**2).mean() / rdegrees.mean()
+print(f"G(n,m): <k> = {rdegrees.mean():.2f}   <k_nn>/<k> = {r_knn/rdegrees.mean():.2f}x")
+```
+
+1.10x, barely a paradox at all. A Poisson degree distribution just doesn't have the tail to
+produce this — you need real hubs, not merely random edges, for the effect to be worth
+writing a post about. Our own power-law regression (from last exercise, heavily caveated —
+303 nodes isn't enough to pin an exponent down) put Marvel's γ around 2.46. Whatever the
+exact number, the tail is fat enough to make the friendship paradox roughly 20x stronger than
+a same-size, same-density random graph produces.
+
+Curious how that gap depends on exactly how fat the tail is? [We built a live version of
+this comparison](/explorables/friendship-paradox-gamma.html) — drag γ and watch the paradox
+strengthen or collapse.
+
+## What surprised us
+
+Not that the paradox holds — with a max degree of 106 in a 303-node network, that was never
+going to be close. What surprised us is how *concentrated* it is: ten characters are
+responsible for a third of every instance of it, and the only two characters who escape it
+entirely are the network's biggest star and the accidental king of a nine-person island that
+doesn't talk to anyone else.

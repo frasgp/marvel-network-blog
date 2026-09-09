@@ -8,6 +8,8 @@ website:
     left:
       - href: index.qmd
         text: Posts
+      - href: explorables/friendship-paradox-gamma.qmd
+        text: Explorables
       - href: about.qmd
         text: About
     right:

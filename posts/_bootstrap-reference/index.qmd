@@ -1,0 +1,470 @@
+---
+title: "Week 1 — Mapping the Marvel Wiki-Link Network"
+subtitle: "Degree distributions, in vs. out, and the islands outside the giant component"
+date: 2026-09-02
+categories: [week1, degree-distributions, network-visualization]
+author: "Marvel Graph Lab"
+resources:
+  - network_interactive.html
+execute:
+  echo: true
+  warning: false
+---
+
+## What we asked
+
+Week 1's playground is the network of all 303 characters in Wikipedia's
+[Category:Marvel Comics superheroes](https://en.wikipedia.org/wiki/Category:Marvel_Comics_superheroes),
+linked by whichever internal wiki-links their articles actually contain. This is the bootstrap
+post, so we stuck to the assignment's core prompt rather than chasing a tangent:
+
+- What do the in-degree and out-degree distributions look like, on linear and on log-log axes?
+- Who gets linked to the most, who links out the most — and why are those different people?
+- Draw the network. Find the islands outside the giant component.
+
+Everything below is computed live from the frozen week-1 snapshot (`week1_nodes.tsv` /
+`week1_edges.tsv`, released 2026-08-26) — every headline number is backed by an `assert` against
+the network's own structure, not typed in from memory.
+
+## Loading the network without losing the isolates
+
+17 of the 303 characters have no link in either direction. Building the graph from the edge list
+alone would silently drop them, so every node gets added before a single edge does.
+
+```{python}
+import math
+
+import numpy as np
+import pandas as pd
+import networkx as nx
+import matplotlib.pyplot as plt
+
+nodes = pd.read_csv("data/week1_nodes.tsv", sep="\t", comment="#",
+                     quoting=3)  # QUOTE_NONE: TSVs never quote, but blurbs may contain "quotes"
+edges = pd.read_csv("data/week1_edges.tsv", sep="\t", comment="#",
+                     names=["source", "target"])
+
+G = nx.DiGraph()
+G.add_nodes_from(nodes.node_id)
+G.add_edges_from(edges.itertuples(index=False))
+
+assert G.number_of_nodes() == 303, G.number_of_nodes()
+assert G.number_of_edges() == 1784, G.number_of_edges()
+print(f"Directed graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+
+name_lookup = dict(zip(nodes.node_id, nodes.name))
+```
+
+## Reconciling directed vs. undirected
+
+```{python}
+G_und = G.to_undirected()  # default reciprocal=False: "connected at all, either direction"
+n = G_und.number_of_nodes()
+m_und = G_und.number_of_edges()
+avg_k = 2 * m_und / n
+
+assert m_und == 1434, m_und
+print(f"Undirected: {m_und} edges, average degree <k> = 2m/n = {avg_k:.2f}")
+
+mutual_pairs = sum(1 for u, v in G.edges() if G.has_edge(v, u)) // 2
+assert mutual_pairs == 350, mutual_pairs
+print(f"Reciprocated (mutual) pairs: {mutual_pairs}")
+print(f"{G.number_of_edges()} directed edges - {mutual_pairs} mutual pairs = "
+      f"{G.number_of_edges() - mutual_pairs} undirected edges")
+
+density = m_und / (n * (n - 1) / 2)
+print(f"Density: {density:.3f} — about {density:.0%} of all possible pairs are connected")
+```
+
+Each mutual pair contributes two directed edges (A→B and B→A) but only one undirected edge, so
+the directed and undirected edge counts differ by exactly the number of mutual pairs. Average
+in-degree and average out-degree must be equal (both are just $m/n$, since every directed edge
+has exactly one tail and one head) — that symmetry is a property of *any* directed graph, not
+something special about this one.
+
+## The giant component — and the islands outside it
+
+This is the part last week's exercise notebook never actually computed: which characters sit
+outside the network's one big connected blob?
+
+```{python}
+comps = sorted(nx.connected_components(G_und), key=len, reverse=True)
+
+sizes = [len(c) for c in comps]
+assert sizes == [277, 9] + [1] * 17, sizes
+assert sum(sizes) == 303
+
+giant, island = comps[0], comps[1]
+isolates = set().union(*comps[2:])
+
+print(f"{len(comps)} connected components total")
+print(f"  giant component: {len(giant)} characters ({len(giant)/n:.0%} of the network)")
+print(f"  one island:      {len(island)} characters")
+print(f"  isolates:        {len(isolates)} characters, each its own component")
+print(f"  {len(giant)} + {len(island)} + {len(isolates)} = {len(giant) + len(island) + len(isolates)}")
+```
+
+```{python}
+print("The 9-character island:")
+for node_id in sorted(island, key=lambda x: name_lookup[x]):
+    print(f"  {name_lookup[node_id]}")
+```
+
+That island isn't a random grab-bag — it's essentially the entire 1980s *Strikeforce: Morituri*
+spin-off squad, wiki-linked tightly to each other and to almost nobody else in the mainstream
+Marvel universe pages. More on this in "what surprised us" below.
+
+## In-degree vs. out-degree distributions
+
+Plotted against $k+1$ on every axis, since a log axis can't show zero and 17 characters have
+in- or out-degree 0.
+
+```{python}
+def raw_distribution(values):
+    """values: iterable of raw non-negative integers (e.g. degrees). Returns sorted {v+1: count}."""
+    counts = {}
+    for v in values:
+        u = v + 1
+        counts[u] = counts.get(u, 0) + 1
+    return dict(sorted(counts.items()))
+
+in_degrees = [d for _, d in G.in_degree()]
+out_degrees = [d for _, d in G.out_degree()]
+
+in_dist = raw_distribution(in_degrees)
+out_dist = raw_distribution(out_degrees)
+
+print(f"in-degree range: 0 to {max(in_degrees)}")
+print(f"out-degree range: 0 to {max(out_degrees)}")
+```
+
+```{python}
+#| label: fig-degree-raw
+#| fig-cap: "In-degree and out-degree, linear (left) and log-log (right), plotted against k+1."
+
+fig, axes = plt.subplots(2, 2, figsize=(11, 9))
+
+for row, (dist, title) in enumerate([(in_dist, "In-degree"), (out_dist, "Out-degree")]):
+    u_vals = list(dist.keys())
+    counts = list(dist.values())
+
+    ax_lin = axes[row, 0]
+    ax_lin.bar(u_vals, counts, width=0.8, color="steelblue")
+    ax_lin.set_title(f"{title} (linear)")
+    ax_lin.set_xlabel("k + 1")
+    ax_lin.set_ylabel("number of nodes")
+
+    ax_log = axes[row, 1]
+    ax_log.scatter(u_vals, counts, s=20, color="steelblue")
+    ax_log.set_xscale("log")
+    ax_log.set_yscale("log")
+    ax_log.set_title(f"{title} (log-log)")
+    ax_log.set_xlabel("k + 1 (log scale; the +1 keeps the isolates visible)")
+    ax_log.set_ylabel("number of nodes (log scale)")
+
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+def top5(degree_view, label):
+    ranked = sorted(degree_view, key=lambda x: x[1], reverse=True)[:5]
+    print(f"Top 5 by {label}:")
+    for node_id, k in ranked:
+        print(f"  {name_lookup[node_id]}: {k}")
+
+top5(G.in_degree(), "in-degree")
+print()
+top5(G.out_degree(), "out-degree")
+```
+
+## Binning, per the course's exact scheme
+
+Working in $u = k+1$: width-1 bins for $u = 1, \dots, 7$, then doubling bins with **integer**
+edges — $[8,16)$, $[16,32)$, $[32,64)$, $[64,128)$ — never `np.logspace`, so every bin holds a
+known, exact set of integers and none is empty by construction. Each bin's count is divided by
+its width (a density per unit degree), and each bin is drawn at the geometric mean of the
+*integers it covers*.
+
+```{python}
+def bin_edges(max_u):
+    """Integer edges: width-1 for u=1..7 (edges 1..8), then doubling (8,16,32,...) past max_u."""
+    edges = list(range(1, 9))  # 1,2,3,4,5,6,7,8 -> seven width-1 bins covering u=1..7
+    while edges[-1] <= max_u:
+        edges.append(edges[-1] * 2)
+    return edges
+
+
+def binned_distribution(dist):
+    """dist: {u: count}. Returns (xs, ys): bin position (geometric mean of covered integers)
+    and density (count / bin width)."""
+    edges = bin_edges(max(dist))
+    xs, ys = [], []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        width = hi - lo
+        count = sum(c for u, c in dist.items() if lo <= u < hi)
+        xs.append(np.sqrt(lo * (hi - 1)))
+        ys.append(count / width)
+    return xs, ys
+
+
+in_bin_x, in_bin_y = binned_distribution(in_dist)
+out_bin_x, out_bin_y = binned_distribution(out_dist)
+
+
+def check_width1_matches_raw(dist, xs, ys, n_width1=7):
+    for i in range(n_width1):
+        u = i + 1
+        assert abs(xs[i] - u) < 1e-9, (xs[i], u)
+        assert abs(ys[i] - dist.get(u, 0)) < 1e-9, (ys[i], dist.get(u, 0))
+
+check_width1_matches_raw(in_dist, in_bin_x, in_bin_y)
+check_width1_matches_raw(out_dist, out_bin_x, out_bin_y)
+print("Sanity check passed: binned values exactly match raw P(u) for every width-1 bin (u = 1..7).")
+```
+
+```{python}
+#| label: fig-degree-binned
+#| fig-cap: "Raw vs. binned in-degree and out-degree, log-log. The binned curve sits exactly on the raw points where bins are width 1, and only smooths where the data thins."
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 5))
+
+for ax, (dist, bin_x, bin_y, title) in zip(
+    axes,
+    [(in_dist, in_bin_x, in_bin_y, "In-degree"), (out_dist, out_bin_x, out_bin_y, "Out-degree")],
+):
+    ax.scatter(list(dist.keys()), list(dist.values()), s=15, color="lightgray", label="raw")
+    ax.plot(bin_x, bin_y, "o-", color="crimson", label="binned")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_title(f"{title}: raw vs. binned (log-log)")
+    ax.set_xlabel("k + 1")
+    ax.set_ylabel("density (nodes / bin width)")
+    ax.legend()
+
+plt.tight_layout()
+plt.show()
+```
+
+(We don't fit a power-law slope to this — never fit a slope to binned, shifted data. Reading the
+shape is this week's job; the cumulative distribution that actually supports fitting arrives in
+week 2.)
+
+## Why do the in-degree and out-degree leaders differ?
+
+The two top-5 lists above barely overlap, and that's not a coincidence — it's about *who creates*
+each kind of edge. An in-link is **conferred**: some other article's editors decided this
+character was worth mentioning and linking to. An out-link is **authored**: someone had to sit
+down and write it into *this* page. Conferred links have no natural ceiling — every other article
+in the encyclopedia is a potential source — which is exactly why Spider-Man's in-degree (106) can
+run so far ahead of the pack. Authored links are bounded by one editor's patience on one article,
+which is why even the most link-happy page, Betsy Braddock's, tops out at 28.
+
+```{python}
+#| label: fig-inout-scatter
+#| fig-cap: "Out-degree vs. in-degree per character. The top-5 by each measure are almost entirely different people."
+
+top_in_ids = {nid for nid, _ in sorted(G.in_degree(), key=lambda x: x[1], reverse=True)[:5]}
+top_out_ids = {nid for nid, _ in sorted(G.out_degree(), key=lambda x: x[1], reverse=True)[:5]}
+
+fig, ax = plt.subplots(figsize=(7, 7))
+xs = [G.out_degree(nid) for nid in G.nodes()]
+ys = [G.in_degree(nid) for nid in G.nodes()]
+ax.scatter(xs, ys, s=18, color="lightgray", zorder=1)
+
+for nid in top_in_ids | top_out_ids:
+    x, y = G.out_degree(nid), G.in_degree(nid)
+    color = "#c8102e" if nid in top_in_ids else "#1f77b4"
+    ax.scatter([x], [y], s=45, color=color, zorder=2)
+    ax.annotate(name_lookup[nid], (x, y), fontsize=8, xytext=(4, 4), textcoords="offset points")
+
+ax.set_xlabel("out-degree")
+ax.set_ylabel("in-degree")
+ax.set_title("In-degree vs. out-degree (red = top-5 in-degree, blue = top-5 out-degree)")
+plt.tight_layout()
+plt.show()
+```
+
+None of the top-5-by-out-degree characters crack the top-5-by-in-degree list, and vice versa —
+the two measures are picking out genuinely different kinds of "important."
+
+## Drawing the network
+
+All 303 characters, colored by which of the three populations they belong to. The giant
+component gets a force-directed layout; the 17 true isolates have no edges to be pulled anywhere
+by that layout, so they're placed deliberately on an outer ring instead of piling up at the
+origin.
+
+```{python}
+#| label: fig-network
+#| fig-cap: "The Marvel wiki-link network: giant component (red, sized by degree), the Strikeforce: Morituri island (blue), and the 17 isolates (gray ring)."
+
+non_isolate_nodes = [nd for nd in G_und.nodes() if G_und.degree(nd) > 0]
+H = G_und.subgraph(non_isolate_nodes)
+pos = nx.spring_layout(H, seed=42, k=0.2)
+
+main_extent = max(abs(coord) for xy in pos.values() for coord in xy)
+ring_radius = main_extent * 1.6
+for i, node_id in enumerate(sorted(isolates)):
+    angle = 2 * math.pi * i / len(isolates)
+    pos[node_id] = (ring_radius * math.cos(angle), ring_radius * math.sin(angle))
+
+def color_for(node_id):
+    if node_id in giant:
+        return "#c8102e"
+    elif node_id in island:
+        return "#1f77b4"
+    return "#b0b0b0"
+
+node_colors = [color_for(nd) for nd in G_und.nodes()]
+node_sizes = [30 + 6 * G_und.degree(nd) for nd in G_und.nodes()]
+
+fig, ax = plt.subplots(figsize=(11, 11))
+nx.draw_networkx_edges(H, pos, alpha=0.15, edge_color="gray", ax=ax)
+nx.draw_networkx_nodes(G_und, pos, node_color=node_colors, node_size=node_sizes, linewidths=0, ax=ax)
+
+top_hub_ids = [nid for nid, _ in sorted(G.degree(), key=lambda x: x[1], reverse=True)[:5]]
+label_box = dict(facecolor="white", alpha=0.8, edgecolor="none", pad=1.5)
+
+for i, nid in enumerate(top_hub_ids):
+    x, y = pos[nid]
+    ax.annotate(name_lookup[nid], (x, y), fontsize=8, ha="left",
+                xytext=(main_extent * 1.05, main_extent * 0.9 - i * main_extent * 0.12),
+                textcoords="data", bbox=label_box,
+                arrowprops=dict(arrowstyle="-", color="gray", lw=0.6))
+
+island_offsets = [(0, 0.1), (0.15, 0.05), (0.16, -0.05), (0, -0.1),
+                   (-0.15, -0.05), (-0.16, 0.05), (0, 0.17), (0.2, 0), (-0.2, 0)]
+for (dx, dy), nid in zip(island_offsets, sorted(island, key=lambda x: pos[x][0])):
+    x, y = pos[nid]
+    ha = "left" if dx > 0 else ("right" if dx < 0 else "center")
+    ax.annotate(name_lookup[nid], (x, y), fontsize=7, ha=ha,
+                xytext=(x + dx, y + dy), textcoords="data", bbox=label_box)
+
+ax.set_xlim(-ring_radius * 1.15, ring_radius * 1.6)
+ax.set_ylim(-ring_radius * 1.15, ring_radius * 1.15)
+ax.set_title("Giant component (red) · the 9-character island (blue) · 17 isolates (gray ring)")
+ax.axis("off")
+plt.tight_layout()
+plt.show()
+```
+
+::: {.callout-note collapse="true"}
+## Bonus: drag it around yourself
+
+The static plot above is the required figure. For "go nuts," here's the same network as a
+draggable, hoverable [pyvis](https://pyvis.readthedocs.io/) widget — physics-simulated, so the
+isolates drift free instead of sitting on a fixed ring.
+
+```{python}
+#| output: false
+from pyvis.network import Network
+
+net = Network(height="700px", width="100%", bgcolor="white", font_color="black",
+               cdn_resources="in_line")
+net.from_nx(G_und)
+
+for node in net.nodes:
+    node_id = node["id"]
+    node["label"] = name_lookup[node_id]
+    node["title"] = f"{name_lookup[node_id]} · degree {G_und.degree(node_id)}"
+    if node_id in giant:
+        node["color"] = "#c8102e"
+    elif node_id in island:
+        node["color"] = "#1f77b4"
+    else:
+        node["color"] = "#b0b0b0"
+
+net.write_html("network_interactive.html", notebook=False)
+```
+
+```{=html}
+<iframe src="network_interactive.html" width="100%" height="700"
+        style="border:1px solid #ddd; border-radius:6px;"></iframe>
+```
+:::
+
+## What surprised us
+
+Two things stood out once we actually looked, rather than assumed:
+
+1. **The 9-node island isn't noise — it's a whole forgotten team.** Every member —
+   Vyking, Radian, Snapdragon, Scatterbrain, Shear, Blackthorn, Toxyn, Backhand, Scaredycat — is
+   a member of *Strikeforce: Morituri*, a 1980s spin-off series. They link to each other freely
+   but never got cross-linked into the mainstream Marvel universe pages that dominate the giant
+   component. A network built purely from wiki-links doesn't know "these are all still Marvel
+   characters" — it only knows what editors actually wrote, and apparently nobody writing about
+   Spider-Man or the Avengers ever mentioned this team.
+2. **The in/out asymmetry is much sharper than the average degree suggests.** The average degree
+   is a modest 9.5, but the *range* is wildly lopsided: a max in-degree of 106 against a max
+   out-degree of only 28. The average hides just how differently "famous" and "chatty" characters
+   behave in this graph.
+
+## Data & code
+
+Dataset: [course data page](https://sunelehmann.com/socialgraphs2026-web/data/), week-1 release
+(303 nodes, 1,784 directed edges, frozen 2026-08-26). All numbers on this page are computed live
+from that snapshot when the site is rendered — see the `assert` statements throughout.
+
+::: {.callout-note collapse="true"}
+## Bonus appendix: does the real in-degree look more like an exponential or a power law?
+
+Not required this week, but it came for free from earlier prep work, so here it is. 10,000 draws
+each from a synthetic exponential and a synthetic power law (Zipf), compared against the real
+(binned) in-degree distribution across all four linear/log combinations.
+
+```{python}
+#| label: fig-synthetic-compare
+#| fig-cap: "Real in-degree (binned) vs. 10,000-sample synthetic exponential and power-law distributions, all four axis combinations."
+
+rng = np.random.default_rng(42)
+
+exp_samples = np.floor(rng.exponential(scale=5, size=10000)).astype(int) + 1
+pow_samples = rng.zipf(a=2.0, size=10000)
+
+def raw_distribution_from_samples(samples):
+    counts = {}
+    for v in samples:
+        counts[int(v)] = counts.get(int(v), 0) + 1
+    return dict(sorted(counts.items()))
+
+exp_dist = raw_distribution_from_samples(exp_samples)
+pow_dist = raw_distribution_from_samples(pow_samples)
+
+exp_prob = {v: c / len(exp_samples) for v, c in exp_dist.items()}
+pow_prob = {v: c / len(pow_samples) for v, c in pow_dist.items()}
+in_bin_prob_y = [y / len(in_degrees) for y in in_bin_y]
+
+fig, axes = plt.subplots(2, 2, figsize=(11, 9))
+configs = [
+    (False, False, "linear-linear"),
+    (False, True, "linear-log"),
+    (True, False, "log-linear"),
+    (True, True, "log-log"),
+]
+
+for ax, (xlog, ylog, title) in zip(axes.flat, configs):
+    ax.scatter(list(exp_prob.keys()), list(exp_prob.values()), s=12, color="darkorange", label="exponential")
+    ax.scatter(list(pow_prob.keys()), list(pow_prob.values()), s=12, color="teal", label="power law")
+    ax.plot(in_bin_x, in_bin_prob_y, "o-", color="crimson", markersize=4, label="real in-degree (binned)")
+    if xlog:
+        ax.set_xscale("log")
+    else:
+        ax.set_xlim(0, 60)
+    if ylog:
+        ax.set_yscale("log")
+    ax.set_title(title)
+    ax.set_xlabel("value")
+    ax.set_ylabel("probability")
+    ax.legend(fontsize=8)
+
+plt.tight_layout()
+plt.show()
+```
+
+On log-log axes, the exponential specimen visibly curves and drops off, while the power law
+stays close to a straight line across its whole range — and the real in-degree's binned curve
+tracks that straight-line behavior more closely than the curving exponential, especially past
+$k+1 \approx 10$. Confidence should stay moderate, though: the real curve is only 7-8 binned
+points spanning about two decades, built from a single 303-node sample.
+:::

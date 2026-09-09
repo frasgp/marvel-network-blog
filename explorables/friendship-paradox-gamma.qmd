@@ -1,0 +1,279 @@
+---
+title: "Explorable: Friendship Paradox vs. γ"
+page-layout: full
+toc: false
+---
+
+Drag γ to change how heavy-tailed the degree distribution is, then watch the friendship
+paradox strengthen or collapse. Each node's degree is sampled from a power law with that γ,
+then wired up into a real graph via the configuration model (random stub-pairing) — nothing
+here is precomputed, it's regenerated live in your browser. Companion piece to [Week 2's
+friendship-paradox post](/posts/2026-week2-friendship-paradox/).
+
+```{=html}
+<div id="paradox-explorable">
+  <style>
+    #paradox-explorable {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      max-width: 900px;
+      margin: 1rem 0;
+      color: #212529;
+    }
+    #paradox-explorable .controls {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      padding: 1rem;
+      background: #f7f7f9;
+      border-radius: 8px;
+      border: 1px solid #e3e3e6;
+    }
+    #paradox-explorable .controls label {
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    #paradox-explorable input[type="range"] {
+      flex: 1;
+      min-width: 180px;
+      accent-color: #4c72b0;
+    }
+    #paradox-explorable .gamma-value {
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+      min-width: 3.2em;
+    }
+    #paradox-explorable button {
+      background: #4c72b0;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 0.45rem 0.9rem;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    #paradox-explorable button:hover {
+      background: #3a5a8f;
+    }
+    #paradox-explorable .layout {
+      display: flex;
+      gap: 1.5rem;
+      margin-top: 1rem;
+      flex-wrap: wrap;
+      align-items: flex-start;
+    }
+    #paradox-explorable .stats {
+      flex: 1;
+      min-width: 220px;
+    }
+    #paradox-explorable .stat {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.35rem 0;
+      border-bottom: 1px solid #eee;
+      font-size: 0.95rem;
+    }
+    #paradox-explorable .stat .label {
+      color: #555;
+    }
+    #paradox-explorable .stat .value {
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+    }
+    #paradox-explorable .marvel-ref {
+      margin-top: 0.9rem;
+      padding: 0.7rem 0.9rem;
+      background: #fff4e5;
+      border-left: 3px solid #e8a33d;
+      font-size: 0.85rem;
+      border-radius: 4px;
+      color: #5c4419;
+    }
+    #paradox-explorable canvas {
+      border: 1px solid #e3e3e6;
+      border-radius: 8px;
+      background: white;
+    }
+  </style>
+
+  <div class="controls">
+    <label for="gamma-slider">γ =</label>
+    <input type="range" id="gamma-slider" min="2.05" max="4.5" step="0.01" value="2.46">
+    <span class="gamma-value" id="gamma-value">2.46</span>
+    <button id="reroll-btn">reroll</button>
+  </div>
+
+  <div class="layout">
+    <canvas id="scatter-canvas" width="440" height="440"></canvas>
+    <div class="stats">
+      <div class="stat"><span class="label">nodes (n)</span><span class="value" id="stat-n">303</span></div>
+      <div class="stat"><span class="label">links realized</span><span class="value" id="stat-m">-</span></div>
+      <div class="stat"><span class="label">&lt;k&gt;</span><span class="value" id="stat-k">-</span></div>
+      <div class="stat"><span class="label">&lt;k_nn&gt;</span><span class="value" id="stat-knn">-</span></div>
+      <div class="stat"><span class="label">ratio &lt;k_nn&gt;/&lt;k&gt;</span><span class="value" id="stat-ratio">-</span></div>
+      <div class="stat"><span class="label">% with friends more popular</span><span class="value" id="stat-frac">-</span></div>
+      <div class="marvel-ref">
+        Real Marvel network (303 characters, 1434 links): ratio ≈ <strong>2.33x</strong>,
+        87% of characters have friends more popular than they are. Its own CCDF regression
+        put γ around <strong>2.46</strong> (the slider's starting point) — heavily caveated,
+        303 nodes is thin for pinning down an exponent.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const N = 303;
+  const canvas = document.getElementById("scatter-canvas");
+  const ctx = canvas.getContext("2d");
+  const slider = document.getElementById("gamma-slider");
+  const gammaLabel = document.getElementById("gamma-value");
+  const rerollBtn = document.getElementById("reroll-btn");
+
+  function sampleDegreeSequence(gamma, n) {
+    const xmin = 1;
+    const cap = n - 1;
+    const degs = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const r = Math.random();
+      let d = xmin * Math.pow(1 - r, -1 / (gamma - 1));
+      d = Math.round(d);
+      if (d < 1) d = 1;
+      if (d > cap) d = cap;
+      degs[i] = d;
+    }
+    let sum = degs.reduce((a, b) => a + b, 0);
+    if (sum % 2 === 1) {
+      degs[0] += 1;
+    }
+    return degs;
+  }
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  // Configuration model: build a stub list from the degree sequence, shuffle it,
+  // pair consecutive stubs into edges. Self-loops and repeated pairs can occur
+  // (as in any configuration model) - we dedupe them away when building the
+  // adjacency sets below, same as the real post drops self-loops.
+  function buildConfigModelGraph(degs) {
+    const stubs = [];
+    for (let i = 0; i < degs.length; i++) {
+      for (let k = 0; k < degs[i]; k++) stubs.push(i);
+    }
+    shuffle(stubs);
+    const adj = Array.from({ length: degs.length }, () => new Set());
+    for (let i = 0; i + 1 < stubs.length; i += 2) {
+      const a = stubs[i], b = stubs[i + 1];
+      if (a === b) continue; // drop self-loops
+      adj[a].add(b);
+      adj[b].add(a);
+    }
+    return adj;
+  }
+
+  function render(gamma) {
+    gammaLabel.textContent = gamma.toFixed(2);
+
+    const targetDegs = sampleDegreeSequence(gamma, N);
+    const adj = buildConfigModelGraph(targetDegs);
+    const degree = adj.map((s) => s.size);
+
+    let m = 0;
+    for (const d of degree) m += d;
+    m = m / 2;
+
+    const ownDeg = [];
+    const nbrMeanDeg = [];
+    let paradoxCount = 0;
+    let connectedCount = 0;
+    for (let i = 0; i < N; i++) {
+      if (adj[i].size === 0) continue;
+      connectedCount++;
+      let sum = 0;
+      for (const nb of adj[i]) sum += degree[nb];
+      const meanNbr = sum / adj[i].size;
+      ownDeg.push(degree[i]);
+      nbrMeanDeg.push(meanNbr);
+      if (meanNbr > degree[i]) paradoxCount++;
+    }
+
+    const meanK = degree.reduce((a, b) => a + b, 0) / N;
+    const meanK2 = degree.reduce((a, b) => a + b * b, 0) / N;
+    const knn = meanK2 / meanK;
+    const ratio = knn / meanK;
+
+    document.getElementById("stat-n").textContent = N;
+    document.getElementById("stat-m").textContent = Math.round(m);
+    document.getElementById("stat-k").textContent = meanK.toFixed(2);
+    document.getElementById("stat-knn").textContent = knn.toFixed(2);
+    document.getElementById("stat-ratio").textContent = ratio.toFixed(2) + "x";
+    document.getElementById("stat-frac").textContent =
+      ((paradoxCount / connectedCount) * 100).toFixed(0) + "%";
+
+    drawScatter(ownDeg, nbrMeanDeg);
+  }
+
+  function drawScatter(ownDeg, nbrMeanDeg) {
+    const w = canvas.width, h = canvas.height;
+    const pad = 40;
+    ctx.clearRect(0, 0, w, h);
+
+    const maxVal = Math.max(1, ...ownDeg, ...nbrMeanDeg) * 1.3;
+    const minVal = 0.8;
+    const logMin = Math.log10(minVal), logMax = Math.log10(maxVal);
+
+    function xPix(v) {
+      return pad + ((Math.log10(Math.max(v, minVal)) - logMin) / (logMax - logMin)) * (w - 2 * pad);
+    }
+    function yPix(v) {
+      return h - pad - ((Math.log10(Math.max(v, minVal)) - logMin) / (logMax - logMin)) * (h - 2 * pad);
+    }
+
+    // axes
+    ctx.strokeStyle = "#ccc";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(pad, pad, w - 2 * pad, h - 2 * pad);
+
+    // diagonal (friends = you)
+    ctx.strokeStyle = "#999";
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(xPix(minVal), yPix(minVal));
+    ctx.lineTo(xPix(maxVal), yPix(maxVal));
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // points
+    ctx.fillStyle = "rgba(76, 114, 176, 0.55)";
+    for (let i = 0; i < ownDeg.length; i++) {
+      const x = xPix(ownDeg[i]);
+      const y = yPix(nbrMeanDeg[i]);
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = "#555";
+    ctx.font = "12px sans-serif";
+    ctx.fillText("own degree →", w / 2 - 30, h - 12);
+    ctx.save();
+    ctx.translate(14, h / 2 + 30);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText("mean friend degree →", 0, 0);
+    ctx.restore();
+  }
+
+  slider.addEventListener("input", () => render(parseFloat(slider.value)));
+  rerollBtn.addEventListener("click", () => render(parseFloat(slider.value)));
+
+  render(parseFloat(slider.value));
+})();
+</script>
+```
