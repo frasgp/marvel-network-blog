@@ -16,3 +16,4 @@ __pycache__/
 .DS_Store
 
 **/*.quarto_ipynb
+CLAUDE.md
