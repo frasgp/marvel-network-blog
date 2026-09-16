@@ -1,0 +1,433 @@
+---
+title: "Week 3 — Thanos Was Inefficient"
+subtitle: "Snapping half the Marvel universe at random leaves the survivors connected. A smarter attacker needs a quarter — and nobody is individually essential."
+date: 2026-09-16
+categories: [week3]
+author: "Marvel Graph Lab"
+execute:
+  echo: true
+  warning: false
+---
+
+## What we asked
+
+Thanos removed half of all life, chosen at random. As a plan for breaking a network, how
+good was that? This week's tools — shortest paths, betweenness, null models — let us ask the
+question properly: if you delete Marvel characters one at a time, which *order* fragments the
+wiki-link universe fastest? Is any single character essential, in the sense that losing them
+strands other characters? And is whatever we find a fact about Marvel, or just a fact about
+any network with this degree sequence?
+
+## Loading this week's release
+
+No new dataset this week — the shared week-1 snapshot is reused as-is (303 characters, 1784
+directed links, 17 isolates). Fragmentation is a question about who can still reach whom, so we
+drop direction and work on the undirected giant component.
+
+```{python}
+import random
+
+import networkx as nx
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+%matplotlib inline
+
+nodes = pd.read_csv("data/week3_nodes.tsv", sep="\t", comment="#", quoting=3)
+edges = pd.read_csv("data/week3_edges.tsv", sep="\t", comment="#", names=["source", "target"])
+
+graph = nx.DiGraph()
+graph.add_nodes_from(nodes.node_id)
+graph.add_edges_from(edges.itertuples(index=False))
+name_lookup = dict(zip(nodes.node_id, nodes.name))
+
+g = graph.to_undirected()
+g.remove_edges_from(nx.selfloop_edges(g))
+giant = g.subgraph(max(nx.connected_components(g), key=len)).copy()
+N = giant.number_of_nodes()
+
+
+def gc_size(h):
+    return max((len(c) for c in nx.connected_components(h)), default=0)
+
+
+print(f"Giant component: {N} characters, {giant.number_of_edges()} links")
+```
+
+## The snap, versus a strategy
+
+One function, five removal orders. "Static" orders rank everyone once on the intact network
+and work down the list; "adaptive" orders re-rank after every removal, which is what an
+attacker who can see the damage they've done would actually do.
+
+```{python}
+def attack(h, strategy, stop_frac=0.55, seed=0):
+    """Remove nodes one at a time. Returns giant-component sizes (index 0 = intact) and a log of (node, degree at removal)."""
+    h = h.copy()
+    n0 = h.number_of_nodes()
+    sizes, log = [gc_size(h)], []
+    if strategy == "random":
+        order = list(h.nodes())
+        random.Random(seed).shuffle(order)
+    elif strategy == "degree":
+        order = sorted(h.nodes(), key=lambda n: -h.degree(n))
+    elif strategy == "betweenness":
+        b = nx.betweenness_centrality(h)
+        order = sorted(h.nodes(), key=lambda n: -b[n])
+    for step in range(int(stop_frac * n0)):
+        if strategy == "adaptive degree":
+            v = max(h.degree(), key=lambda kv: kv[1])[0]
+        elif strategy == "adaptive betweenness":
+            b = nx.betweenness_centrality(h)
+            v = max(b, key=b.get)
+        else:
+            v = order[step]
+        log.append((v, h.degree(v)))
+        h.remove_node(v)
+        sizes.append(gc_size(h))
+    return np.array(sizes), log
+
+
+def halving_point(sizes):
+    """Number of removals until the giant component is at most half its starting size."""
+    return int(np.argmax(sizes <= sizes[0] / 2))
+
+
+strategies = ["degree", "betweenness", "adaptive degree", "adaptive betweenness"]
+curves = {s: attack(giant, s) for s in strategies}
+random_runs = [attack(giant, "random", seed=s)[0] for s in range(20)]
+```
+
+```{python}
+#| label: fig-collapse
+#| fig-cap: "Giant-component size as characters are removed, by removal order. The dashed line is what you'd see if the network never fragmented at all — the giant component shrinking only because people are gone. The random snap sits on it."
+
+x = np.arange(len(random_runs[0])) / N
+rand = np.array(random_runs) / N
+
+fig, ax = plt.subplots(figsize=(7.5, 5))
+ax.plot(x, 1 - x, "--", color="gray", linewidth=1, label="no fragmentation (1 − removed)")
+ax.fill_between(x, rand.min(axis=0), rand.max(axis=0), color="#999999", alpha=0.3)
+ax.plot(x, rand.mean(axis=0), color="#555555", linewidth=2, label="random snap (20 runs)")
+colors = {"degree": "#4c72b0", "betweenness": "#55a868", "adaptive degree": "#8172b2", "adaptive betweenness": "#c8102e"}
+for s in strategies:
+    ax.plot(x, curves[s][0] / N, color=colors[s], linewidth=2, label=s)
+ax.set_xlabel("fraction of characters removed")
+ax.set_ylabel("giant component (fraction of original)")
+ax.set_ylim(0, 1.02)
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+rows = [("random snap (mean of 20)", np.mean([halving_point(r) for r in random_runs]))]
+rows += [(s, halving_point(curves[s][0])) for s in strategies]
+halving = pd.DataFrame(rows, columns=["removal order", "removals to halve the giant component"])
+halving["share of characters"] = (halving.iloc[:, 1] / N).map("{:.0%}".format)
+halving
+```
+
+```{python}
+half = int(np.ceil(N / 2))
+snap_gc = np.mean([r[half] for r in random_runs])
+print(f"Snap {half} of {N} at random: {N - half} survivors, {snap_gc:.0f} of them still in one connected piece")
+k = halving_point(curves["adaptive betweenness"][0])
+print(f"Remove {k} by adaptive betweenness: {N - k} survivors, {curves['adaptive betweenness'][0][k]} of them still in one connected piece")
+```
+
+The snap curve is the dashed diagonal, give or take a few characters. Snap exactly half the
+cast — 139 of 277, at random — and 125 of the 138 survivors are still in one connected piece;
+thirteen people get stranded. Thanos halved the population and fragmented almost nothing.
+Ranking by degree or betweenness once and working down the list gets the giant component to
+half its size with 81 removals; re-ranking after every removal gets it there with 63, or 23% of
+the cast — and this time 76 of the 214 survivors are cut off from the main body, in 41
+separate pieces. Same giant component, a very different universe.
+
+Sixty-three is the honest headline number, and it's not a small one. The textbook picture of a
+scale-free network is one that shatters when you pull a handful of hubs. This one doesn't:
+there are enough links among the non-hubs that you have to delete a quarter of the universe,
+chosen as cleverly as we know how, to break it in half.
+
+Or run the snap yourself — the slider replays every removal order from the figure above:
+
+```{python}
+#| code-fold: true
+#| code-summary: "widget code"
+import json
+from IPython.display import HTML, display
+
+series = {"random snap (mean of 20)": np.mean(random_runs, axis=0).round(1).tolist()}
+series.update({s: curves[s][0].tolist() for s in strategies})
+payload = json.dumps({
+    "n": N,
+    "series": series,
+    "order": [name_lookup[v] for v, _ in curves["adaptive betweenness"][1]],
+})
+
+widget = """
+<div id="snap-explorable">
+<style>
+#snap-explorable { border: 1px solid #ddd; border-radius: 6px; padding: 14px 16px; margin: 8px 0 20px; background: #fafafa; }
+#snap-explorable input[type=range] { width: 100%; margin: 6px 0 10px; }
+#snap-explorable table { width: 100%; border-collapse: collapse; }
+#snap-explorable th, #snap-explorable td { padding: 4px 6px; text-align: left; border-bottom: 1px solid #eee; font-size: 0.95em; }
+#snap-explorable td.num { text-align: right; white-space: nowrap; }
+#snap-explorable .bar { height: 10px; background: #c8102e; border-radius: 3px; }
+#snap-explorable .last { color: #555; margin-top: 10px; font-size: 0.95em; }
+</style>
+<label for="snap-k"><strong>Remove <span id="snap-k-label">0</span> of <span id="snap-n"></span> characters</strong>
+(<span id="snap-pct">0%</span>)</label>
+<input type="range" id="snap-k" min="0" max="0" value="0">
+<table>
+<thead><tr><th>removal order</th><th>giant component</th><th style="width: 40%"></th></tr></thead>
+<tbody id="snap-rows"></tbody>
+</table>
+<div class="last" id="snap-last"></div>
+<script>
+(function () {
+  const DATA = __DATA__;
+  const names = Object.keys(DATA.series);
+  const slider = document.getElementById("snap-k");
+  const rows = document.getElementById("snap-rows");
+  slider.max = DATA.series[names[0]].length - 1;
+  document.getElementById("snap-n").textContent = DATA.n;
+  names.forEach(function (s) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td>" + s + "</td><td class='num'></td><td><div class='bar'></div></td>";
+    rows.appendChild(tr);
+  });
+  function render() {
+    const k = Number(slider.value);
+    document.getElementById("snap-k-label").textContent = k;
+    document.getElementById("snap-pct").textContent = Math.round(100 * k / DATA.n) + "%";
+    names.forEach(function (s, i) {
+      const size = DATA.series[s][k];
+      const tr = rows.children[i];
+      tr.children[1].textContent = Math.round(size) + " of " + (DATA.n - k) + " survivors";
+      tr.children[2].firstChild.style.width = (100 * size / DATA.n) + "%";
+    });
+    const last = DATA.order.slice(Math.max(0, k - 5), k).reverse();
+    document.getElementById("snap-last").textContent = k
+      ? "Last removed by the adaptive attacker: " + last.join(", ")
+      : "Nobody removed yet.";
+  }
+  slider.addEventListener("input", render);
+  render();
+})();
+</script>
+</div>
+"""
+display(HTML(widget.replace("__DATA__", payload)))
+```
+
+## The hit list
+
+Who does the adaptive attacker actually remove, and how far does that list drift from the
+fame ranking?
+
+```{python}
+degree = dict(giant.degree())
+static_bet = nx.betweenness_centrality(giant)
+degree_rank = {n: r + 1 for r, n in enumerate(sorted(giant.nodes(), key=lambda n: -degree[n]))}
+bet_rank = {n: r + 1 for r, n in enumerate(sorted(giant.nodes(), key=lambda n: -static_bet[n]))}
+
+hit_list = pd.DataFrame(
+    [
+        (i + 1, name_lookup[v], d, degree[v], degree_rank[v], bet_rank[v])
+        for i, (v, d) in enumerate(curves["adaptive betweenness"][1][:12])
+    ],
+    columns=["step", "character", "degree when removed", "original degree", "degree rank", "betweenness rank"],
+)
+hit_list
+```
+
+For six steps the attacker and the fame ranking agree exactly: Spider-Man, Hulk, Wolverine,
+Doctor Strange, Deadpool, She-Hulk — degree ranks 1 through 6, in order. Step 7 is where they
+part. Hercules, degree rank 20, gets pulled forward thirteen places: with the hubs gone, his
+bridge to the mythology characters is one of the few routes left between that corner and the
+rest. From there the list stops looking like a popularity contest — Cloak and Dagger (degree
+rank 13), Quasar (26), Hank Pym (16) — while Scarlet Witch, 32 links and degree rank 8, isn't
+touched in the first twelve. The "degree when removed" column is the tell: by step 11 the
+attacker is deleting characters with 24 links, because they carry more of the *remaining*
+shortest paths than Scarlet Witch's 32 do.
+
+## Nobody is essential
+
+The attack curves say the network is hard to break by attrition. Single removals are the
+sharper version of the question: is there any one character whose deletion cuts other
+characters off entirely?
+
+```{python}
+articulation = set(nx.articulation_points(giant))
+stranded = []
+for v in articulation:
+    h = giant.copy()
+    h.remove_node(v)
+    stranded.append((name_lookup[v], degree[v], bet_rank[v], N - 1 - gc_size(h)))
+
+stranded = pd.DataFrame(stranded, columns=["character", "degree", "betweenness rank", "characters stranded"])
+stranded = stranded.sort_values("characters stranded", ascending=False).reset_index(drop=True)
+print(f"{len(articulation)} of {N} characters strand anyone at all when removed")
+stranded
+```
+
+Thirteen. The other 264 can vanish one at a time and every remaining character still reaches
+every other. Spider-Man — degree 106, betweenness rank 1 — is the most damaging single
+removal, and he strands *five people*. Black Widow, degree 25, strands three, which is the
+number that made us look twice: more than Doctor Strange (degree 57, two), and more than Hulk
+or Wolverine, who have 65 and 63 links and strand one at most.
+
+That's the same Black Widow who showed up last time we compared betweenness to a null model.
+Betweenness rewards having lots of links as much as it rewards sitting between things, so we
+scored every character against 200 shuffled copies of the network that keep everyone's exact
+degree and rewire the rest:
+
+```{python}
+#| label: fig-zscore
+#| fig-cap: "Betweenness z-score (real vs. 200 degree-preserving shuffles) against degree. Points far above zero broker more than their degree alone predicts."
+
+random.seed(42)
+m = giant.number_of_edges()
+samples = {n: [] for n in giant.nodes()}
+for _ in range(200):
+    gs = giant.copy()
+    try:
+        nx.double_edge_swap(gs, nswap=m, max_tries=m * 10, seed=random.randint(0, 10**9))
+    except nx.NetworkXAlgorithmError:
+        pass
+    bs = nx.betweenness_centrality(gs)
+    for n in giant.nodes():
+        samples[n].append(bs[n])
+
+
+def zscore(real, s):
+    arr = np.array(s)
+    return (real - arr.mean()) / arr.std() if arr.std() > 0 else np.nan
+
+
+z = {n: zscore(static_bet[n], samples[n]) for n in giant.nodes()}
+
+fig, ax = plt.subplots(figsize=(7, 5))
+ok = [n for n in giant.nodes() if not np.isnan(z[n])]
+ax.scatter([degree[n] for n in ok], [z[n] for n in ok], alpha=0.5, s=18, color="#4c72b0")
+ax.axhline(0, color="gray", linewidth=0.8)
+for query in ["Hercules", "Black Widow"]:
+    node_id = nodes[nodes["name"].str.contains(query, case=False, na=False)].iloc[0]["node_id"]
+    ax.scatter([degree[node_id]], [z[node_id]], color="#c8102e", s=40, zorder=5)
+    ax.annotate(query, (degree[node_id], z[node_id]), fontsize=9, fontweight="bold",
+                xytext=(6, 4), textcoords="offset points")
+ax.set_xlabel("degree")
+ax.set_ylabel("betweenness z-score vs. degree-preserving null")
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+stranded_by = dict(zip(stranded["character"], stranded["characters stranded"]))
+brokers = sorted(ok, key=lambda n: -z[n])[:6]
+pd.DataFrame(
+    [(name_lookup[n], degree[n], round(z[n], 2), bet_rank[n], stranded_by.get(name_lookup[n], 0)) for n in brokers],
+    columns=["character", "degree", "betweenness z-score", "betweenness rank", "characters stranded"],
+)
+```
+
+Black Widow and Hercules are the two characters whose betweenness is furthest above what their
+degree predicts — 3.9 and 3.8 standard deviations above the shuffles, with degrees of 25 and
+26 that don't crack the top ten by any "how connected are you" measure. (Further down the
+list, Ikaris and Nightmask manage a z-score above 3 with *five* links each. Being a
+statistically unusual broker is cheap.) They're genuine
+brokers: their links sit on routes between clusters (Avengers-core and the espionage crowd for
+Black Widow; Avengers-core and the classical-mythology characters for Hercules) that would
+otherwise take the long way round. But brokerage and essentiality turn out to be different
+things. Black Widow's bridge is a real one — cut it and three characters fall off. Hercules's
+isn't: remove him and everyone he "bridges" still reaches everyone else, just one hop later.
+High betweenness tells you a lot of shortest paths *currently* go through someone. It doesn't
+tell you there's no second-shortest path.
+
+## Compared to what
+
+Twenty-three percent is a robust network, but robust compared to what? Two nulls, attacked the
+same way: degree-preserving shuffles of Marvel (same characters, same degrees, links rewired at
+random) and `G(n, m)` random graphs with the same number of nodes and links but no hubs at all.
+
+```{python}
+def null_attack(h, label):
+    giant_h = h.subgraph(max(nx.connected_components(h), key=len)).copy()
+    adaptive, _ = attack(giant_h, "adaptive betweenness", stop_frac=0.5)
+    rand = attack(giant_h, "random", stop_frac=0.55)[0]
+    n_h = giant_h.number_of_nodes()
+    return {"null": label, "nodes": n_h, "adaptive": adaptive, "random": rand,
+            "adaptive %": halving_point(adaptive) / n_h, "random %": halving_point(rand) / n_h}
+
+
+null_runs = []
+for s in range(5):
+    shuffled = giant.copy()
+    nx.double_edge_swap(shuffled, nswap=m, max_tries=m * 10, seed=s)
+    null_runs.append(null_attack(shuffled, "degree-preserving shuffle"))
+    null_runs.append(null_attack(nx.gnm_random_graph(N, m, seed=s), "G(n, m) random graph"))
+
+def spread(runs, key):
+    vals = [r[key] for r in runs]
+    return f"{np.mean(vals):.1%}  ({min(vals):.1%} – {max(vals):.1%})"
+
+
+rows = [("Marvel", f"{halving_point(curves['adaptive betweenness'][0]) / N:.1%}",
+         f"{np.mean([halving_point(r) for r in random_runs]) / N:.1%}  (mean of 20)")]
+for label in ["degree-preserving shuffle", "G(n, m) random graph"]:
+    runs = [r for r in null_runs if r["null"] == label]
+    rows.append((f"{label} (5 runs)", spread(runs, "adaptive %"), spread(runs, "random %")))
+pd.DataFrame(rows, columns=["network", "adaptive betweenness attack: share removed to halve", "random snap: share removed to halve"])
+```
+
+```{python}
+#| label: fig-null-collapse
+#| fig-cap: "The adaptive-betweenness attack on Marvel (red) against the same attack on five degree-preserving shuffles (blue) and five G(n, m) random graphs (green)."
+
+fig, ax = plt.subplots(figsize=(7.5, 5))
+for run in null_runs:
+    xs = np.arange(len(run["adaptive"])) / run["nodes"]
+    color = "#4c72b0" if run["null"].startswith("degree") else "#55a868"
+    ax.plot(xs, run["adaptive"] / run["nodes"], color=color, alpha=0.6, linewidth=1.2)
+ax.plot([], [], color="#4c72b0", label="degree-preserving shuffles")
+ax.plot([], [], color="#55a868", label="G(n, m) random graphs")
+marvel = curves["adaptive betweenness"][0]
+ax.plot(np.arange(len(marvel)) / N, marvel / N, color="#c8102e", linewidth=2.5, label="Marvel")
+ax.axhline(0.5, color="gray", linewidth=0.8, linestyle=":")
+ax.set_xlabel("fraction of characters removed (adaptive betweenness order)")
+ax.set_ylabel("giant component (fraction of original)")
+ax.set_xlim(0, 0.5)
+ax.set_ylim(0, 1.02)
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
+
+Marvel breaks *sooner* than its own shuffles: 22.7% of the cast, against 27.3% (25.6–28.2%
+across five rewirings) for networks with exactly the same characters and exactly the same
+degrees — about thirteen fewer removals. So the robustness we found above is actually the
+degree sequence being *generous*; Marvel's real wiring gives some of it back. The random snap
+doesn't care about any of this: 46% for Marvel, 47% for the shuffles, 50% for `G(n, m)`.
+Attrition is a degree-sequence property and nothing else.
+
+The hub-free random graphs are the other half of the answer. There, the adaptive attack needs
+46% — barely better than snapping at random, because with every character at roughly the same
+degree there is nothing worth targeting. Hubs are what make a targeted attack work at all. And
+the specific way Marvel's links are arranged — teams, families, and the brokers who connect
+them — is what makes it work five points better than the degrees alone predict. Rewire those
+same links at random and the seams the attacker was cutting along stop existing.
+
+## What surprised us
+
+Not that a targeted attack beats a random one — that's the whole point of centrality. What
+surprised us is the scale on both ends. Thanos's snap, at exactly half the cast, strands
+thirteen people; the other 125 survivors are as connected as they ever were. And the best
+attack we could build still needs 63 deletions, nearly a quarter of the universe, to halve the
+giant component — no single one of them strands more than five, and the network's second most
+statistically unusual broker, Hercules, strands none. Black Widow is the odd one out: a broker
+by the null model *and* the second most damaging single removal in the network, at degree 25.
+The part we didn't expect at all is the null: a random rewiring of Marvel with the same degrees
+is *harder* to break than Marvel. Whatever structure the wiki-link universe has beyond its
+degree sequence, it isn't there to protect it.
