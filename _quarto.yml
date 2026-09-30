@@ -1,5 +1,7 @@
 project:
   type: website
+  resources:
+    - explorables/philosophers.json
 
 website:
   title: "Marvel Graph Lab"

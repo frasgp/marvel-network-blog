@@ -1,0 +1,477 @@
+---
+title: "Week 4 — Aristotle Is the Seam"
+subtitle: "Louvain and Infomap disagree about the history of philosophy, and the disagreement runs straight through Aristotle. In the strictest backbone he is the last hub standing."
+date: 2026-09-30
+categories: [week4, philosophers]
+author: "Marvel Graph Lab"
+execute:
+  echo: true
+  warning: false
+---
+
+## What we asked
+
+Week 4 hands us community detection, and a new network: 1,444 philosophers born before 1900,
+linked when one Wikipedia article links to another. Every method on the menu — Louvain,
+Infomap, k-cliques, weights, the disparity-filter backbone — comes with its own idea of what a
+"group" is. So we asked the uncomfortable version: where do the methods *disagree*, and is
+there one philosopher who keeps turning up at the disagreement?
+
+There is, with one caveat we'll get to. It's Aristotle. The rest of this post is the evidence, and there's a
+[live explorable](/explorables/philosophers-backbone.qmd) where you can drag the backbone apart
+yourself. (Marvel sat this week out. The philosophers are the shared network now.)
+
+## Loading this week's release
+
+Directed, weighted links; we sum both directions into an undirected weighted graph and keep the
+giant component (1,374 philosophers, 9,139 links), which is what every number below refers to.
+
+```{python}
+import collections
+import math
+
+import matplotlib.pyplot as plt
+import networkx as nx
+import numpy as np
+import pandas as pd
+from infomap import Infomap
+from networkx.algorithms.community import k_clique_communities, louvain_communities, modularity
+from sklearn.metrics import normalized_mutual_info_score as nmi
+
+%matplotlib inline
+
+nodes = pd.read_csv("data/week4_philosophers_nodes.tsv", sep="\t", comment="#", quoting=3).set_index("node_id")
+edges = pd.read_csv("data/week4_philosophers_edges.tsv", sep="\t", comment="#", quoting=3)
+name = nodes["name"].to_dict()
+
+directed = nx.DiGraph()
+directed.add_weighted_edges_from(
+    (r.source, r.target, r.weight) for r in edges.itertuples(index=False) if r.source != r.target
+)
+
+und = nx.Graph()
+for u, v, w in directed.edges(data="weight"):
+    und.add_edge(u, v, weight=w + (und[u][v]["weight"] if und.has_edge(u, v) else 0))
+
+P = und.subgraph(max(nx.connected_components(und), key=len)).copy()
+U = list(P.nodes())
+directed = directed.subgraph(U).copy()
+print(f"{P.number_of_nodes()} philosophers, {P.number_of_edges()} links, max weight {max(w for *_, w in P.edges(data='weight'))}")
+```
+
+```{python}
+#| code-fold: true
+def labels(part):
+    lab = {n: i for i, c in enumerate(part) for n in c}
+    return [lab[n] for n in U]
+
+
+def by_size(part):
+    return sorted(part, key=len, reverse=True)
+
+
+def top_names(community, k=2):
+    return ", ".join(name[n] for n in sorted(community, key=lambda n: -P.degree(n))[:k])
+
+
+def infomap_partition(is_directed=False, weighted=False, seed=1):
+    src = directed if is_directed else P
+    idx = {n: i for i, n in enumerate(U)}
+    im = Infomap(silent=True, seed=seed, num_trials=20, two_level=True, directed=is_directed)
+    for u, v, w in src.edges(data="weight"):
+        im.add_link(idx[u], idx[v], w if weighted else 1)
+    im.run()
+    modules = collections.defaultdict(set)
+    for leaf in im.tree:
+        if leaf.is_leaf:
+            modules[leaf.module_id].add(U[leaf.node_id])
+    return by_size(list(modules.values()))
+
+
+def disagreeing(part_a, part_b):
+    """Philosophers whose part_b module mostly lives in a *different* part_a community than they do."""
+    lab_a = {n: i for i, c in enumerate(part_a) for n in c}
+    moved = set()
+    for module in part_b:
+        home = collections.Counter(lab_a[n] for n in module).most_common(1)[0][0]
+        moved |= {n for n in module if lab_a[n] != home}
+    return moved
+```
+
+## Louvain against Infomap
+
+Louvain maximises modularity: *more internal links than a degree-matched random graph would
+give*. Infomap asks a different question: where does a random walker get stuck? On a link graph
+of encyclopedia articles those are not obviously the same thing. Ten Louvain seeds against
+Infomap's answer, next to how much Louvain disagrees with *itself*:
+
+```{python}
+louvain = [by_size(louvain_communities(P, weight=None, seed=s)) for s in range(10)]
+infomap = infomap_partition()
+
+louvain_vs_self = [nmi(labels(louvain[i]), labels(louvain[j])) for i in range(10) for j in range(i + 1, 10)]
+louvain_vs_infomap = [nmi(labels(p), labels(infomap)) for p in louvain]
+
+print(f"Louvain:  {sorted(len(p) for p in louvain)}  communities across 10 seeds, Q = {np.mean([modularity(P, p, weight=None) for p in louvain]):.3f}")
+print(f"Infomap:  {len(infomap)} modules, Q = {modularity(P, infomap, weight=None):.3f}")
+print(f"NMI Louvain vs Louvain (seed to seed): {np.mean(louvain_vs_self):.2f}  (range {min(louvain_vs_self):.2f}-{max(louvain_vs_self):.2f})")
+print(f"NMI Louvain vs Infomap:                {np.mean(louvain_vs_infomap):.2f}  (range {min(louvain_vs_infomap):.2f}-{max(louvain_vs_infomap):.2f})")
+```
+
+Infomap finds 35 modules where Louvain finds 8, and still sits no further from Louvain (0.69)
+than Louvain sits from *itself* (0.69). Different seeds of the same algorithm disagree as much
+as two different algorithms do. So "Louvain vs Infomap" is mostly a comparison of granularity
+plus a lot of seed noise, and the interesting question is which philosophers are on the
+wrong side of the noise. Infomap also has knobs, and the agreement depends on which you turn:
+
+```{python}
+variants = {
+    "undirected, unweighted": (False, False),
+    "undirected, weighted": (False, True),
+    "directed, unweighted": (True, False),
+    "directed, weighted": (True, True),
+}
+rows = []
+for label, (d, w) in variants.items():
+    part = infomap_partition(d, w)
+    rows.append({
+        "Infomap variant": label,
+        "modules": len(part),
+        "three largest": ", ".join(str(len(c)) for c in part[:3]),
+        "NMI vs Louvain": round(np.mean([nmi(labels(p), labels(part)) for p in louvain]), 2),
+    })
+pd.DataFrame(rows).set_index("Infomap variant")
+```
+
+Using direction and weights pushes Infomap further from Louvain (0.54 for directed and weighted),
+which is the right direction: a random walker cares about who cites whom and how hard, and
+modularity, as we ran it, doesn't. Now the figure the question asked for, with the
+undirected, unweighted variant so Louvain and Infomap see the same graph:
+
+```{python}
+#| label: fig-disagree
+#| fig-cap: "Left: the philosopher network, coloured by one Louvain run (seed 3); red rings mark philosophers whose Infomap module mostly lives in a different Louvain community. Right: how Louvain's communities (rows) split across Infomap's modules (columns)."
+#| fig-width: 12
+#| fig-height: 6
+
+lou = louvain[3]
+lab_lou = {n: i for i, c in enumerate(lou) for n in c}
+
+# layout only: pull same-community pairs together so the communities separate on the page
+layout_graph = P.copy()
+for u, v in layout_graph.edges():
+    layout_graph[u][v]["layout_w"] = 6.0 if lab_lou[u] == lab_lou[v] else 1.0
+rng = np.random.default_rng(7)
+centres = {i: 1.4 * np.array([np.cos(2 * np.pi * i / len(lou)), np.sin(2 * np.pi * i / len(lou))]) for i in range(len(lou))}
+start = {n: centres[lab_lou[n]] + 0.3 * rng.standard_normal(2) for n in U}
+pos = nx.spring_layout(layout_graph, weight="layout_w", pos=start, seed=7, iterations=150, k=0.12)
+moved = disagreeing(lou, infomap)
+
+palette = ["#c8102e", "#4c72b0", "#55a868", "#dd8452", "#8172b3", "#937860", "#da8bc3", "#8c8c8c", "#ccb974", "#64b5cd"]
+fig, (ax, ax2) = plt.subplots(1, 2, figsize=(12, 6), gridspec_kw={"width_ratios": [1.15, 1]})
+
+nx.draw_networkx_edges(P, pos, ax=ax, width=0.15, edge_color="#bbbbbb", alpha=0.5)
+xy = np.array([pos[n] for n in U])
+ax.scatter(xy[:, 0], xy[:, 1], s=[4 + 1.2 * P.degree(n) ** 0.9 for n in U],
+           c=[palette[lab_lou[n] % len(palette)] for n in U], linewidths=0, zorder=2)
+mv = np.array([pos[n] for n in moved])
+ax.scatter(mv[:, 0], mv[:, 1], s=60, facecolors="none", edgecolors="black", linewidths=0.8, zorder=3)
+for i, c in enumerate(lou):
+    cx, cy = np.median([pos[n] for n in c], axis=0)
+    ax.text(cx, cy, top_names(c, 1), fontsize=9, weight="bold", ha="center", va="center",
+            bbox={"boxstyle": "round,pad=0.2", "fc": "white", "ec": palette[i % len(palette)], "alpha": 0.85})
+ax.set_axis_off()
+ax.set_title(f"{len(moved)} of {len(U)} philosophers ({len(moved) / len(U):.0%}) get a different neighbourhood from Infomap", fontsize=10)
+
+inf_top = infomap[:8]
+table = np.array([[len(set(lc) & set(ic)) for ic in inf_top] for lc in lou])
+im_ = ax2.imshow(np.log10(table + 1), cmap="Reds", aspect="auto")
+ax2.set_yticks(range(len(lou)), [f"{top_names(c, 1)} ({len(c)})" for c in lou], fontsize=8)
+ax2.set_xticks(range(len(inf_top)), [f"{top_names(c, 1)}\n({len(c)})" for c in inf_top], fontsize=7, rotation=35, ha="right")
+for i in range(table.shape[0]):
+    for j in range(table.shape[1]):
+        if table[i, j] >= 8:
+            ax2.text(j, i, table[i, j], ha="center", va="center", fontsize=7, color="white" if table[i, j] > 60 else "black")
+ax2.set_xlabel("Infomap module")
+ax2.set_ylabel("Louvain community")
+plt.tight_layout()
+plt.show()
+```
+
+The disagreement is not spread evenly. Plato's Louvain community goes 141 of 148 into a
+single Infomap module. Aristotle's is shredded: 45 members go to Plato's module, 30 to
+Aquinas's, 19 to Descartes's, and only the rest stay put. Louvain drew one line around
+"Aristotle and the people near him"; Infomap says the random walker never stays there. It
+leaves through Plato, through the scholastics, or through the early moderns.
+
+## Does weighting rewrite the history?
+
+The unweighted graph treats a passing mention like a lifelong obsession. The weight is how
+many times one article links to the other, so it is the cheapest available proxy for "this
+philosopher matters to that one". Louvain on the weighted graph, same ten seeds:
+
+```{python}
+weighted = [by_size(louvain_communities(P, weight="weight", seed=s)) for s in range(10)]
+w_vs_u = [nmi(labels(a), labels(b)) for a, b in zip(louvain, weighted)]
+
+print(f"weighted Louvain: {sorted(len(p) for p in weighted)} communities, Q_w = {np.mean([modularity(P, p, weight='weight') for p in weighted]):.3f}")
+print(f"NMI weighted vs unweighted (same seed): {np.mean(w_vs_u):.2f}  (range {min(w_vs_u):.2f}-{max(w_vs_u):.2f})")
+
+movers = disagreeing(louvain[3], weighted[3])
+degree = dict(P.degree())
+strength = dict(P.degree(weight="weight"))
+print(f"\n{len(movers)} philosophers ({len(movers) / len(U):.0%}) change community; highest-degree movers:")
+lab_w = {n: i for i, c in enumerate(weighted[3]) for n in c}
+for n in sorted(movers, key=lambda n: -degree[n])[:8]:
+    print(f"  {name[n]:<28} unweighted -> {top_names(louvain[3][lab_lou[n]], 1):<22} weighted -> {top_names(weighted[3][lab_w[n]], 1)}")
+```
+
+Weighting moves a quarter of the network (NMI 0.65 against the same seed unweighted), which
+is about what a different seed does anyway. What's specific is *who* moves. The whole
+Christian cluster that Louvain hangs off Aquinas (Augustine, Jesus, Plotinus, Dante, Luther)
+flips into the Plato-and-Aristotle community once repeated links count for more, and Einstein
+and Darwin leave Kant's community for Russell's. Heavier links say the scholastics are
+Greek philosophy with a different accent.
+
+## Which tradition is Aristotle really in?
+
+Louvain puts him in the community named after him (216 philosophers, alongside Avicenna,
+Averroes and Galileo). Count where his 300 neighbours live:
+
+```{python}
+def neighbour_communities(who, part):
+    lab = {n: i for i, c in enumerate(part) for n in c}
+    return collections.Counter(lab[n] for n in P[who]), lab[who]
+
+
+for who in ["Aristotle", "Plato", "Immanuel_Kant", "Confucius"]:
+    counts, home = neighbour_communities(who, louvain[3])
+    print(f"{name[who]}: degree {P.degree(who)}, {counts[home] / P.degree(who):.0%} of neighbours in own community "
+          f"({', '.join(f'{c} in {top_names(louvain[3][k], 1)}' for k, c in counts.most_common(4))})")
+
+print()
+for k in (4, 5, 6):
+    cliques = list(k_clique_communities(P, k))
+    homes = sorted((len(c) for c in cliques if "Aristotle" in c), reverse=True)
+    print(f"k={k}: {len(cliques)} clique communities; Aristotle is in {len(homes)} of them, sizes {homes}")
+```
+
+Only a third of Aristotle's 300 neighbours (98) share his community. Plato manages 43%, Kant
+56%, Confucius 67%. More of Aristotle's links point at Plato's community (66) and Aquinas's
+(56) than you'd expect of a philosopher who supposedly belongs to a third one, and 34 point at
+Kant's. The k-clique view agrees from the other side: at k=4 he is inside a single
+817-philosopher blob (the giant of the philosopher network, as clique percolation tends to
+produce), but at k=5 he belongs to six clique communities and at k=6 to seven. A philosopher
+who sits in seven separate tight groups is not in any of them.
+
+```{python}
+#| label: fig-aristotle
+#| fig-cap: "Aristotle at the centre, his 300 links coloured by the Louvain community of the philosopher at the other end. Only the orange ones are in his own community."
+#| fig-width: 8
+#| fig-height: 8
+
+ego, own = "Aristotle", lab_lou["Aristotle"]
+groups = collections.defaultdict(list)
+for n in P[ego]:
+    groups[lab_lou[n]].append(n)
+order = sorted(groups, key=lambda k: (k != own, -len(groups[k])))
+angles = {}
+theta = 0.0
+for k in order:
+    span = 2 * np.pi * len(groups[k]) / P.degree(ego)
+    members = sorted(groups[k], key=lambda n: -P[ego][n]["weight"])
+    for i, n in enumerate(members):
+        angles[n] = theta + span * (i + 0.5) / len(members)
+    groups[k] = members
+    theta += span
+
+fig, ax = plt.subplots(figsize=(8, 8))
+for k in order:
+    color = palette[k % len(palette)]
+    for n in groups[k]:
+        r = 1.0 + 0.02 * (P.degree(n) ** 0.5)
+        x, y = r * np.cos(angles[n]), r * np.sin(angles[n])
+        ax.plot([0, x], [0, y], color=color, alpha=0.35, linewidth=0.4 + 0.5 * P[ego][n]["weight"])
+        ax.scatter(x, y, s=8 + 3 * P.degree(n) ** 0.8, color=color, zorder=3)
+    mid = np.mean([angles[n] for n in groups[k]])
+    ax.text(1.42 * np.cos(mid), 1.42 * np.sin(mid), f"{top_names(louvain[3][k], 1)}\n{len(groups[k])} links",
+            ha="center", va="center", fontsize=9, color=color, weight="bold")
+    for n in groups[k][:1]:
+        ax.annotate(name[n], (1.0 + 0.02 * P.degree(n) ** 0.5) * np.array([np.cos(angles[n]), np.sin(angles[n])]),
+                    fontsize=7, ha="center", xytext=(0, 5), textcoords="offset points")
+ax.scatter([0], [0], s=260, color="black", zorder=4)
+ax.text(0, -0.13, "Aristotle", ha="center", weight="bold")
+ax.set_xlim(-1.7, 1.7)
+ax.set_ylim(-1.7, 1.7)
+ax.set_aspect("equal")
+ax.set_axis_off()
+plt.tight_layout()
+plt.show()
+```
+
+His own community is the biggest wedge, but not a majority of the ring: Plato's and Aquinas's
+wedges together are bigger than it, and Descartes, Kant and Russell each have one too.
+
+## The backbone, and where it snaps
+
+The disparity filter keeps a link only if it carries a suspiciously large share of at least one
+endpoint's strength (`alpha`, smaller = stricter). Instead of picking three arbitrary cut-offs,
+add links back in order of `alpha` with a union-find and record every merge of two big
+components. The biggest one is where the giant component actually breaks.
+
+```{python}
+def alpha_of_edges(G):
+    """Disparity-filter alpha per undirected edge: the more significant (smaller) of the two endpoint p-values."""
+    alpha = {}
+    for u, v, w in G.edges(data="weight"):
+        p = [(1 - w / G.degree(x, weight="weight")) ** (G.degree(x) - 1) for x in (u, v) if G.degree(x) > 1]
+        alpha[(u, v)] = min(p) if p else 1.0
+    return alpha
+
+
+alpha = alpha_of_edges(P)
+
+parent = {n: n for n in U}
+size = {n: 1 for n in U}
+
+
+def find(x):
+    while parent[x] != x:
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+    return x
+
+
+merges = []
+for (u, v), a in sorted(alpha.items(), key=lambda kv: kv[1]):
+    ru, rv = find(u), find(v)
+    if ru != rv:
+        merges.append((a, min(size[ru], size[rv]), max(size[ru], size[rv]), u, v))
+        parent[ru] = rv
+        size[rv] += size[ru]
+
+a_break, small, large, u, v = max(merges, key=lambda m: m[1])
+print(f"Biggest merge: at alpha = {a_break:.4f}, a {small}-philosopher cluster joins a {large}-philosopher one,")
+print(f"through the link {name[u]} — {name[v]}")
+print("\nNext five biggest merges:")
+for a, s, l, u2, v2 in sorted(merges, key=lambda m: -m[1])[1:6]:
+    print(f"  alpha = {a:.4f}: {s} joins {l} via {name[u2]} — {name[v2]}")
+```
+
+```{python}
+def backbone(threshold):
+    H = nx.Graph()
+    H.add_edges_from(e for e, a in alpha.items() if a < threshold)
+    return H
+
+
+def giant(H):
+    return H.subgraph(max(nx.connected_components(H), key=len)).copy()
+
+
+grid = np.linspace(0.3, 0.005, 120)
+curve = [giant(backbone(t)).number_of_nodes() for t in grid]
+
+after_break = a_break * 0.999
+before_break = a_break * 1.001
+g_before = giant(backbone(before_break))
+g_after = giant(backbone(after_break))
+shattered = [n for n in g_before if n not in g_after]
+print(f"alpha just above break: giant = {g_before.number_of_nodes()} philosophers; just below: {g_after.number_of_nodes()}")
+
+damage = {}
+for n in g_before:
+    h = g_before.copy()
+    h.remove_node(n)
+    damage[n] = g_before.number_of_nodes() - 1 - giant(h).number_of_nodes() if h.number_of_nodes() else 0
+print("\nRemove one philosopher from the giant component (alpha just above the break) and count who gets stranded:")
+for n, d in sorted(damage.items(), key=lambda kv: -kv[1])[:6]:
+    print(f"  {name[n]:<30} strands {d:>3}  (degree in backbone: {g_before.degree(n)})")
+```
+
+The sharpest single break is at alpha = 0.047, where Augustine and Malebranche's link joins a
+40-philosopher cluster to a 68-philosopher one (a medieval-to-Cartesian bridge, if you squint).
+The giant goes from 108 philosophers to 61 across that one link. Ask which *philosopher*
+strands the most people at that alpha and the answer is Erasmus (46), then Augustine (42),
+Malebranche (39), Descartes (38), and Aristotle fifth at 31. That is not our headline, and we
+didn't expect it. The Aristotle–Aquinas link doesn't show up until alpha = 0.031, as a
+13-joins-28 merge.
+
+One philosopher is not the same at every alpha, though. Repeat the removal test at every
+alpha from 0.20 down to 0.02 and note who strands the most people each time:
+
+```{python}
+def most_damaging(G):
+    base = G.number_of_nodes()
+    hits = {}
+    for n in G:
+        h = G.copy()
+        h.remove_node(n)
+        hits[n] = base - 1 - (giant(h).number_of_nodes() if h.number_of_nodes() else 0)
+    return max(hits.items(), key=lambda kv: kv[1]) + (hits.get(ego, 0),)
+
+
+sweep = []
+for a in np.arange(0.20, 0.019, -0.01):
+    g = giant(backbone(a))
+    top, stranded, ari = most_damaging(g)
+    sweep.append({"alpha": round(a, 2), "giant": g.number_of_nodes(), "top breaker": name[top], "strands": stranded, "Aristotle strands": ari})
+sweep = pd.DataFrame(sweep)
+print(sweep["top breaker"].value_counts().to_string())
+sweep[sweep.alpha <= 0.12].set_index("alpha")
+```
+
+```{python}
+#| label: fig-backbone
+#| fig-cap: "The disparity-filter backbone at three values of alpha. Red: the giant component. Black: Aristotle and his backbone links. Left: the giant component's size as alpha tightens, with the break marked."
+#| fig-width: 13
+#| fig-height: 4.6
+
+alphas = [0.2, before_break, after_break]
+fig, axes = plt.subplots(1, 4, figsize=(13, 4.6), gridspec_kw={"width_ratios": [0.9, 1, 1, 1]})
+
+ax = axes[0]
+ax.plot(grid, curve, color="#c8102e", linewidth=2)
+ax.axvline(a_break, color="black", linestyle=":", linewidth=1)
+ax.annotate(f"break\nalpha = {a_break:.3f}", (a_break, g_after.number_of_nodes()), xytext=(0.12, 350), fontsize=9,
+            arrowprops={"arrowstyle": "->", "linewidth": 0.8})
+ax.set_xlabel("alpha (stricter →)")
+ax.set_ylabel("giant component size")
+ax.invert_xaxis()
+ax.spines[["top", "right"]].set_visible(False)
+
+for ax, a in zip(axes[1:], alphas):
+    H = backbone(a)
+    G = giant(H)
+    nx.draw_networkx_edges(P, pos, ax=ax, width=0.1, edge_color="#e4e4e4")
+    nx.draw_networkx_edges(H, pos, ax=ax, width=0.5, edge_color="#999999")
+    nx.draw_networkx_edges(G, pos, ax=ax, width=0.9, edge_color="#c8102e")
+    aristotle_edges = [(ego, n) for n in H[ego]] if ego in H else []
+    nx.draw_networkx_edges(H, pos, ax=ax, edgelist=aristotle_edges, width=1.6, edge_color="black")
+    ax.set_title(f"alpha = {a:.4f} · {H.number_of_edges()} links\ngiant component: {G.number_of_nodes()}", fontsize=10)
+    ax.set_axis_off()
+plt.tight_layout()
+plt.show()
+```
+
+The sweep decides it. Erasmus's reign lasts one alpha value. Aristotle is the most damaging
+single removal at six of nineteen, including every alpha from 0.04 down to 0.02, where the
+backbone has shrunk to the ancient-philosophy core and the answer is Aristotle, with
+Plato or Socrates a distant second. The break itself is a medieval story, and the last thing standing is
+a Greek one.
+
+## What surprised us
+
+That Louvain isn't the odd one out. Its disagreement with Infomap (NMI 0.69) is the size of its
+disagreement with its own reruns, so the headline "the methods disagree" turns into "the
+methods disagree about the same few people", and those people are Aristotle's neighbours.
+Infomap breaks his Louvain community into three; weights fold the medieval Christians into the
+Greeks; k-cliques put him in seven groups at once. Only a third of his links stay inside his
+own community, which is the lowest of any of the big four we checked.
+
+The part we didn't expect is the backbone. We went in expecting one clean philosopher to
+break it, and Aristotle broke it in our first, coarse sweep. Doing it properly, the single
+sharpest break is Augustine–Malebranche, with Erasmus as the philosopher who costs the most
+there. Aristotle's job is different: he is what the backbone keeps at the very end.
+Which one you call "the seam" depends on whether you mean where the network tears first or
+what holds until the end, and we'd argue for the second.
